@@ -1,8 +1,7 @@
 /build*/
 /deps/
-
+/results/
+/matrices/
 __pycache__/
-/matrices/*
-!/matrices/tiny.mtx
-/results/*
-!/results/.gitkeep
+spgemm-*.out
+spgemm-*.err
