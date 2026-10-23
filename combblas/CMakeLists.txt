@@ -1,0 +1,7 @@
+option(USE_OPENMP "Enable threaded CombBLAS kernels" ON)
+if(USE_OPENMP)
+    find_package(OpenMP REQUIRED COMPONENTS CXX)
+endif()
+add_subdirectory(${PROJECT_SOURCE_DIR}/deps/CombBLAS ${CMAKE_BINARY_DIR}/combblas-dependency EXCLUDE_FROM_ALL)
+add_executable(combblas_spgemm benchmark.cpp)
+target_link_libraries(combblas_spgemm PRIVATE CombBLAS MPI::MPI_CXX)

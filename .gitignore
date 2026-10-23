@@ -1,0 +1,8 @@
+/build*/
+/deps/
+
+__pycache__/
+/matrices/*
+!/matrices/tiny.mtx
+/results/*
+!/results/.gitkeep
