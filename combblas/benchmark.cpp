@@ -126,6 +126,9 @@ int main(int argc, char** argv)
         std::cerr << "Rank " << rank << ": " << error.what() << '\n';
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
+    // Release cached MPI handles before profiler/MPI shutdown.
+    combblas::mpioc.clear();
+    combblas::mpidtc.clear();
     MPI_Finalize();
     return status;
 }

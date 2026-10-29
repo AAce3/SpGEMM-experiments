@@ -24,13 +24,15 @@ if [[ ! -d deps/CombBLAS ]]; then
     git clone https://github.com/PASSIONLab/CombBLAS.git deps/CombBLAS
     git -C deps/CombBLAS checkout 2381a1f7a028b9f56d8531c0b7b157ae2ab27572
 fi
-# Apply the compatibility patch once; accept an already patched checkout.
-if git -C deps/CombBLAS apply --check ../../patches/combblas-arm64.patch 2>/dev/null; then
-    git -C deps/CombBLAS apply ../../patches/combblas-arm64.patch
-elif ! git -C deps/CombBLAS apply --reverse --check ../../patches/combblas-arm64.patch 2>/dev/null; then
-    echo "CombBLAS does not match the expected compatibility patch." >&2
-    exit 1
-fi
+# Apply tracked dependency fixes once; preserve already patched checkouts.
+for patch in combblas-arm64.patch combblas-correctness.patch; do
+    if git -C deps/CombBLAS apply --check "../../patches/$patch" 2>/dev/null; then
+        git -C deps/CombBLAS apply "../../patches/$patch"
+    elif ! git -C deps/CombBLAS apply --reverse --check "../../patches/$patch" 2>/dev/null; then
+        echo "CombBLAS does not match the expected patch: $patch" >&2
+        exit 1
+    fi
+done
 if [[ ! -d deps/Trilinos ]]; then
     git clone --depth 1 --branch trilinos-release-17-0-0 \
         https://github.com/trilinos/Trilinos.git deps/Trilinos

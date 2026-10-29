@@ -1,0 +1,203 @@
+diff --git a/include/CombBLAS/MPIOp.h b/include/CombBLAS/MPIOp.h
+index 5c67456..45fa4ef 100644
+--- a/include/CombBLAS/MPIOp.h
++++ b/include/CombBLAS/MPIOp.h
+@@ -21,6 +21,7 @@ private:
+ public:
+     void clear()
+     {
++        if (map.empty()) return;
+         int is_finalized=0;
+         MPI_Finalized(&is_finalized);
+         if (! is_finalized ) 	// do not free after call to MPI_FInalize
+@@ -31,6 +32,7 @@ public:
+                 MPI_Op_free(&(it->second));
+             }
+         }
++        map.clear();
+     }
+     ~MPIOpCache()
+     {
+diff --git a/include/CombBLAS/MPIType.h b/include/CombBLAS/MPIType.h
+index 5546c0b..178ed32 100644
+--- a/include/CombBLAS/MPIType.h
++++ b/include/CombBLAS/MPIType.h
+@@ -61,6 +61,7 @@ private:
+ public:
+   void clear()
+   {
++	if (map.empty()) return;
+ 	int is_finalized=0;
+ 	MPI_Finalized(&is_finalized);
+ 	if (! is_finalized ) 	// do not free after call to MPI_FInalize
+@@ -71,6 +72,7 @@ public:
+ 			MPI_Type_free(&(it->second));
+ 		}
+ 	}
++	map.clear();
+   }
+   ~MPIDataTypeCache()
+   {
+diff --git a/include/CombBLAS/ParFriends.h b/include/CombBLAS/ParFriends.h
+index 4eb5d97..ded15cd 100644
+--- a/include/CombBLAS/ParFriends.h
++++ b/include/CombBLAS/ParFriends.h
+@@ -1518,11 +1518,13 @@ SpParMat<IU, NUO, UDERO> Mult_AnXBn_Synch
+ 						false, 	// 'delete A' condition
+ 						false);	// 'delete B' condition
+ 
+-        if(i != Bself && (!BRecv->isZero())) delete BRecv;
+-        if(i != Aself && (!ARecv->isZero())) delete ARecv;
++        if(i != Bself) delete BRecv;
++        if(i != Aself) delete ARecv;
+ 		
+-		if(!C_cont->isZero()) 
+-			tomerge.push_back(C_cont);
++        if(!C_cont->isZero())
++            tomerge.push_back(C_cont);
++        else
++            delete C_cont;
+ 
+ #ifdef COMBBLAS_DEBUG
+    		std::ostringstream outs;
+diff --git a/include/CombBLAS/SpParHelper.cpp b/include/CombBLAS/SpParHelper.cpp
+index f219829..f772ced 100644
+--- a/include/CombBLAS/SpParHelper.cpp
++++ b/include/CombBLAS/SpParHelper.cpp
+@@ -860,7 +860,7 @@ inline void SpParHelper::check_newline(int *bytes_read, int bytes_requested, cha
+         // fewer bytes than expected, this means EOF
+         if (buf[(*bytes_read) - 1] != '\n') {
+             // doesn't terminate with a newline, add one to prevent infinite loop later
+-            buf[(*bytes_read) - 1] = '\n';
++            buf[*bytes_read] = '\n';
+             std::cout << "Error in Matrix Market format, appending missing newline at end of file" << std::endl;
+             (*bytes_read)++;
+         }
+diff --git a/include/CombBLAS/SpParMat.cpp b/include/CombBLAS/SpParMat.cpp
+index 64ccb8a..d20cc14 100644
+--- a/include/CombBLAS/SpParMat.cpp
++++ b/include/CombBLAS/SpParMat.cpp
+@@ -4011,7 +4011,17 @@ void SpParMat< IT,NT,DER >::ParallelReadMM (const std::string & filename, bool o
+         if (mm_read_banner(f, &matcode) != 0)
+         {
+             printf("Could not process Matrix Market banner.\n");
+-            exit(1);
++            MPI_Abort(commGrid->commWorld, 1);
++            return;
++        }
++        if (!mm_is_matrix(matcode) || !mm_is_sparse(matcode) ||
++            !(mm_is_real(matcode) || mm_is_integer(matcode) || mm_is_pattern(matcode)) ||
++            !(mm_is_general(matcode) || mm_is_symmetric(matcode)))
++        {
++            std::cerr << "Unsupported Matrix Market format: require coordinate real/integer/pattern general/symmetric" << std::endl;
++            fclose(f);
++            MPI_Abort(commGrid->commWorld, 1);
++            return;
+         }
+         linesread++;
+         
+@@ -4042,7 +4052,11 @@ void SpParMat< IT,NT,DER >::ParallelReadMM (const std::string & filename, bool o
+         }
+         int ret_code;
+         if ((ret_code = mm_read_mtx_crd_size(f, &nrows, &ncols, &nonzeros, &linesread)) !=0)  // ABAB: mm_read_mtx_crd_size made 64-bit friendly
+-            exit(1);
++        {
++            fclose(f);
++            MPI_Abort(commGrid->commWorld, 1);
++            return;
++        }
+     
+         std::cout << "Total number of nonzeros expected across all processors is " << nonzeros << std::endl;
+ 
+@@ -4098,6 +4112,7 @@ void SpParMat< IT,NT,DER >::ParallelReadMM (const std::string & filename, bool o
+         entriesread += lines.size();
+         SpHelper::ProcessLines(rows, cols, vals, lines, symmetric, type, onebased);
+     }
++    MPI_File_close(&mpi_fh);
+     int64_t allentriesread;
+     MPI_Reduce(&entriesread, &allentriesread, 1, MPIType<int64_t>(), MPI_SUM, 0, commGrid->commWorld);
+ #ifdef COMBBLAS_DEBUG
+diff --git a/include/CombBLAS/mtSpGEMM.h b/include/CombBLAS/mtSpGEMM.h
+index 356f3b1..2da6002 100644
+--- a/include/CombBLAS/mtSpGEMM.h
++++ b/include/CombBLAS/mtSpGEMM.h
+@@ -99,6 +99,7 @@ SpTuples<IT, NTO> * LocalSpGEMM
+ #ifdef THREADED
+ #pragma omp parallel
+     {
++        #pragma omp single
+         numThreads = omp_get_num_threads();
+     }
+ #endif
+@@ -244,6 +245,7 @@ SpTuples<IT, NTO> * LocalHybridSpGEMM
+ #ifdef THREADED
+ #pragma omp parallel
+     {
++        #pragma omp single
+         numThreads = omp_get_num_threads();
+     }
+ #endif
+@@ -491,6 +493,7 @@ SpTuples<IT, NTO> * LocalHybridSpGEMM
+ #ifdef THREADED
+ #pragma omp parallel
+         {
++            #pragma omp single
+             numThreads = omp_get_num_threads();
+         }
+ #endif
+@@ -671,6 +674,7 @@ IT EstimateLocalFLOP
+ #ifdef THREADED
+ #pragma omp parallel
+     {
++        #pragma omp single
+         numThreads = omp_get_num_threads();
+     }
+ #endif
+@@ -713,6 +717,7 @@ IT* estimateNNZ(const SpDCCols<IT, NT1> & A,const SpDCCols<IT, NT2> & B, IT * au
+ #ifdef THREADED
+ #pragma omp parallel
+     {
++        #pragma omp single
+         numThreads = omp_get_num_threads();
+     }
+ #endif
+@@ -828,6 +833,7 @@ IT* estimateNNZ_Hash(const SpDCCols<IT, NT1> & A,const SpDCCols<IT, NT2> & B, IT
+ #ifdef THREADED
+ #pragma omp parallel
+     {
++        #pragma omp single
+         numThreads = omp_get_num_threads();
+     }
+ #endif
+@@ -1081,6 +1087,7 @@ IT* estimateFLOP(const SpDCCols<IT, NT1> & A,const SpDCCols<IT, NT2> & B, IT * a
+ #ifdef THREADED
+ #pragma omp parallel
+     {
++        #pragma omp single
+         numThreads = omp_get_num_threads();
+     }
+ #endif
+@@ -1167,6 +1174,7 @@ LocalHybridSpGEMM (const SpCCols<IT, NT1>	&A,
+ 	#ifdef THREADED
+ 	#pragma omp parallel
+ 	{
++		#pragma omp single
+ 		numThreads = omp_get_num_threads();
+ 	}
+ 	#endif
+@@ -1334,6 +1342,7 @@ estimateFLOP (const SpCCols<IT, NT1> &A,
+ 	#ifdef THREADED
+ 	#pragma omp parallel
+     {
++        #pragma omp single
+         numThreads = omp_get_num_threads();
+     }
+ 	#endif
+@@ -1380,6 +1389,7 @@ estimateNNZ_Hash (const SpCCols<IT, NT1>	&A,
+ 	#ifdef THREADED
+ 	#pragma omp parallel
+     {
++        #pragma omp single
+         numThreads = omp_get_num_threads();
+     }
+ 	#endif
